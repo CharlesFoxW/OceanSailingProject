@@ -28,7 +28,7 @@ if(NOT OPENGL_FOUND)
     message(ERROR " OPENGL not found!")
 endif(NOT OPENGL_FOUND)
 
-set(SOURCE_FILES main.cpp openGLHeaders.h geometry.h geometry.cpp oceanSailing.h oceanSailing.cpp)
+set(SOURCE_FILES main.cpp openGLHeaders.h geometry.h geometry.cpp oceanSailing.h oceanSailing.cpp pic.h pic.cpp ppm.cpp)
 
 add_executable(OceanSailing ${SOURCE_FILES})
 #########################################################

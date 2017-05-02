@@ -1,9 +1,13 @@
 #include "oceanSailing.h"
 
+int delayCount = 0;
 
 OceanSailing::OceanSailing() {
 
     ParticleCount = 0;
+    hasShipBlock = true;
+    isReady = false;
+    hasWave = false;
     entranceVelocity = Vector(-2.0, 0, -2.0);
     gravity = Vector(0, 0, GRAVITY_ACCELERATION);
 
@@ -13,6 +17,10 @@ OceanSailing::OceanSailing() {
     boundaries.push_back(Plane(Vector(0, 1, 0), Vector(0, -SIZE_Y / 2.0, 0)));
     boundaries.push_back(Plane(Vector(0, -1, 0), Vector(0, SIZE_Y / 2.0, 0)));
     boundaries.push_back(Plane(Vector(0, 0, 1), Vector(0, 0, -0.1)));
+
+    if (hasShipBlock) {
+        myShipBlock = ShipBlock();
+    }
 
     alterGridByParticle();
 }
@@ -104,7 +112,6 @@ void OceanSailing::computerDensityAndPressure() {
                 vector<Particle> &particleVector = grid.refParticleVectorAt(i, j, k);
 
                 for (int l = 0; l < particleVector.size(); l++) {
-                    //Particle& ptcl = particleVector[l];
                     particleVector[l].density = 0;  // re-calculate the density each time.
                     // density at particle positions are determined by
                     // the neighbour grids' particles:
@@ -154,14 +161,23 @@ void OceanSailing::computeAcceleration() {
                 vector<Particle> &particleVector = grid.refParticleVectorAt(i, j, k);
 
                 for (int l = 0; l < particleVector.size(); l++) {
-                    //Particle ptcl = particleVector[l];
 
                     Vector f_viscosity, f_pressure, f_surface, f_gravity;
                     // parameters of the space field containing water:
                     Vector waterFieldNormal;
                     double waterFieldLaplacian = 0;
 
-                    f_gravity = gravity * particleVector[l].density;
+                    if (hasWave && waveClock <= 10000) {
+                        gravity += Vector(-0.01, 0, 0);
+                        waveClock++;
+                        if (waveClock > 10000) {
+                            hasWave = false;
+                        }
+                    } else {
+                        gravity = Vector(0, 0, GRAVITY_ACCELERATION);
+                    }
+
+                    f_gravity = gravity * particleVector[l].density;    // G = density * g.
 
                     // water field on each particle determining by neighbours:
                     for (int x = -1; x <= 1; x++) {
@@ -179,6 +195,13 @@ void OceanSailing::computeAcceleration() {
 
                                 vector<Particle>& neighbourParticleVector = grid.refParticleVectorAt(i + x, j + y, k + z);
                                 //printf("%d,\n", (int) neighbourParticleVector.size());
+                                if (z == 1 && neighbourParticleVector.size() == 0) {
+                                    particleVector[l].isOnTopSurface = true;
+                                } else if (z == 1 && neighbourParticleVector.size() != 0) {
+                                    particleVector[l].isOnTopSurface = false;
+                                }
+
+
                                 for (int m = 0; m < neighbourParticleVector.size(); m++) {
                                     if (particleVector[l].index == neighbourParticleVector[m].index)
                                         continue;
@@ -214,7 +237,6 @@ void OceanSailing::computeAcceleration() {
                     //printf("%.4f\n", waterFieldNormal.magnitude());
 
                     if (waterFieldNormal.magnitude() >= SURFACE_THRESHOLD) {    // the particle is a surface particle
-                        particleVector[l].force = waterFieldNormal;
                         particleVector[l].isOnSurface = true;
                         f_surface =  waterFieldNormal.normalize() * waterFieldLaplacian * (-WATER_SURFACE_TENSION);
                         //printf("%.4f, %.4f, %.4f.\n",f_surface.X(), f_surface.Y(), f_surface.Z());
@@ -223,8 +245,30 @@ void OceanSailing::computeAcceleration() {
                     }
 
                     // from fluid dynamics:
-                    particleVector[l].acceleration = (f_pressure + f_viscosity + f_surface + f_gravity) / particleVector[l].density;
-                    particleVector[l].acceleration += accFromCollisionDetection(particleVector[l]);
+                    if (particleVector[l].index == MAX_NUM_PARTICLES && isReady) {
+                        //blockParticle = particleVector[l];
+                        myShipBlock.acceleration = (f_pressure * 0.1 + f_viscosity * 2.0 + f_surface) / (particleVector[l].density + 0);
+
+                        double heightInsideWater = currentWaterLevel - (myShipBlock.centerPosition.Z() - myShipBlock.height / 2.0);
+                        if (heightInsideWater < 0)
+                            heightInsideWater = 0;
+                        if (heightInsideWater > myShipBlock.height)
+                            heightInsideWater = myShipBlock.height;
+                        //printf("%.4f\n", heightInsideWater);
+                        Vector f_buoyance = Vector(0, 0, -GRAVITY_ACCELERATION * WATER_DENSITY
+                                                         * heightInsideWater * myShipBlock.length * myShipBlock.width);
+                        f_gravity = Vector(0, 0, GRAVITY_ACCELERATION * 300.0
+                                                        * myShipBlock.length * myShipBlock.width * myShipBlock.height);
+
+                        myShipBlock.acceleration += (f_buoyance + f_gravity) /
+                                                    (300.0 * myShipBlock.length * myShipBlock.width * myShipBlock.height);
+                        myShipBlock.acceleration += myShipBlock.velocity * DAMPING_COEFF * 0.3;
+                        particleVector[l].acceleration = myShipBlock.acceleration;
+                    } else {
+                        particleVector[l].acceleration = (f_pressure + f_viscosity + f_surface + f_gravity)
+                                                             / particleVector[l].density;
+                        particleVector[l].acceleration += accFromCollisionDetection(particleVector[l]);
+                    }
                 }
             }
         }
@@ -236,14 +280,17 @@ Vector OceanSailing::accFromCollisionDetection(Particle p) {
     Vector acc = Vector(0, 0, 0);
     // Using spring system model here:
     for (int i = 0; i < boundaries.size(); i++) {
-        Plane& boundary = boundaries[i];
-        double distanceOverBoundary = (boundary.Point() - p.position).dotProduct(boundary.Normal()) + 0.005;
+        Plane boundary = boundaries[i];
+        double distanceOverBoundary = (boundary.Point() - p.position).dotProduct(boundary.Normal()) + 0.01;
 
         if (distanceOverBoundary > 0) { // outside boundary, apply spring back force
             acc += boundary.Normal() * distanceOverBoundary * BOUNDARY_STIFFNESS;
             acc += boundary.Normal() * p.velocity.dotProduct(boundary.Normal()) * DAMPING_COEFF;
         }
     }
+    // ShipBlock collision detection:
+
+
     return acc;
 }
 
@@ -251,16 +298,48 @@ void OceanSailing::alterSceneByForwardEuler(double dt) {
 
     computeAcceleration();
 
+    double sumOfHeight = 0;
+    numOfTopParticles = 0;
+
+    if (hasShipBlock && isReady) {
+        myShipBlock.centerPosition += myShipBlock.velocity * dt + myShipBlock.acceleration * dt * dt;
+        myShipBlock.velocity += myShipBlock.acceleration * dt;
+
+        if (myShipBlock.centerPosition.X() > SIZE_X/2 - myShipBlock.length/2)
+            myShipBlock.centerPosition.x = SIZE_X/2 - myShipBlock.length/2;
+        if (myShipBlock.centerPosition.X() < -SIZE_X/2 + myShipBlock.length/2)
+            myShipBlock.centerPosition.x = -SIZE_X/2 + myShipBlock.length/2;
+        if (myShipBlock.centerPosition.Y() > SIZE_Y/2 - myShipBlock.width/2)
+            myShipBlock.centerPosition.y = SIZE_Y/2 - myShipBlock.width/2;
+        if (myShipBlock.centerPosition.Y() < -SIZE_Y/2 + myShipBlock.width/2)
+            myShipBlock.centerPosition.y = -SIZE_Y/2 + myShipBlock.width/2;
+        if (myShipBlock.centerPosition.Z() < -0.1 + myShipBlock.height/2)
+            myShipBlock.centerPosition.z = -0.1 + myShipBlock.height/2;
+
+    }
+
     for (int i = 0; i < grid.cellCount; i++) {
 
         vector<Particle>& particleVector = grid.particlesInGrid[i];
 
         for (int j = 0; j < particleVector.size(); j++) {
-            particleVector[j].position += particleVector[j].velocity * dt + particleVector[j].acceleration * dt * dt;
-            particleVector[j].velocity += particleVector[j].acceleration * dt;
+            if (particleVector[j].isOnTopSurface) {
+                numOfTopParticles++;
+                sumOfHeight += particleVector[j].position.Z();
+            }
+            if (particleVector[j].index == MAX_NUM_PARTICLES && isReady) {
+                particleVector[j].position = myShipBlock.centerPosition;
+                particleVector[j].velocity = myShipBlock.velocity;
+            } else {
+                particleVector[j].position += particleVector[j].velocity * dt + particleVector[j].acceleration * dt * dt;
+                particleVector[j].velocity += particleVector[j].acceleration * dt;
+            }
+
         }
     }
-    //printf("count = %d\n", Particle::Count);
+
+    currentWaterLevel = sumOfHeight / numOfTopParticles - (-0.025);
+    //printf("currentWaterLevel = %.4f\n", currentWaterLevel);
 
     if (ParticleCount < MAX_NUM_PARTICLES) {
         addParticle(Vector(SIZE_X/2.0-CELL_SIZE/2.0, 0, SIZE_Z*2.0+CELL_SIZE*0.6), entranceVelocity);
@@ -270,13 +349,112 @@ void OceanSailing::alterSceneByForwardEuler(double dt) {
         addParticle(Vector(SIZE_X/2.0-CELL_SIZE/2.0, CELL_SIZE*-0.6, SIZE_Z*2.0+CELL_SIZE*0.3), entranceVelocity);
         addParticle(Vector(SIZE_X/2.0-CELL_SIZE/2.0, CELL_SIZE*0.6, SIZE_Z*2.0+CELL_SIZE*-0.3), entranceVelocity);
         addParticle(Vector(SIZE_X/2.0-CELL_SIZE/2.0, CELL_SIZE*-0.6, SIZE_Z*2.0+CELL_SIZE*-0.3), entranceVelocity);
+    } else if (ParticleCount == MAX_NUM_PARTICLES && isReady) {
+        addParticle(myShipBlock.centerPosition, myShipBlock.velocity);
     }
+
+    if (ParticleCount >= MAX_NUM_PARTICLES && !isReady)
+        delayCount++;
+    if (delayCount > 50 && !isReady)
+        isReady = true;
 
     alterGridByParticle();
 }
 
 void OceanSailing::drawScene() {
+    // draw Shipblock:
+    if (hasShipBlock && isReady) {
 
+        double dimensionX = myShipBlock.length / 2.0;
+        double dimensionY = myShipBlock.width / 2.0;
+        double dimensionZ = myShipBlock.height / 2.0;
+        double centerX = myShipBlock.centerPosition.X();
+        double centerY = myShipBlock.centerPosition.Y();
+        double centerZ = myShipBlock.centerPosition.Z();
+
+        glBegin(GL_QUADS);
+
+        //glFrontFace(GL_CW);
+        glColor4f(0.6, 0.1, 0.2, 1.0);
+        glVertex3d((-dimensionX + centerX) * 2.0, (-dimensionY + centerY) * 2.0, (dimensionZ + centerZ) * 2.0);
+        glVertex3d((-dimensionX + centerX) * 2.0, (-dimensionY + centerY) * 2.0, (-dimensionZ + centerZ) * 2.0);
+        glVertex3d((-dimensionX + centerX) * 2.0, (dimensionY + centerY) * 2.0, (-dimensionZ + centerZ) * 2.0);
+        glVertex3d((-dimensionX + centerX) * 2.0, (dimensionY + centerY) * 2.0, (dimensionZ + centerZ) * 2.0);
+
+        glVertex3d((dimensionX + centerX) * 2.0, (-dimensionY + centerY) * 2.0, (dimensionZ + centerZ) * 2.0);
+        glVertex3d((dimensionX + centerX) * 2.0, (-dimensionY + centerY) * 2.0, (-dimensionZ + centerZ) * 2.0);
+        glVertex3d((dimensionX + centerX) * 2.0, (dimensionY + centerY) * 2.0, (-dimensionZ + centerZ) * 2.0);
+        glVertex3d((dimensionX + centerX) * 2.0, (dimensionY + centerY) * 2.0, (dimensionZ + centerZ) * 2.0);
+        glColor4f(0.8, 0.3, 0.4, 1.0);
+        glVertex3d((-dimensionX + centerX) * 2.0, (-dimensionY + centerY) * 2.0, (dimensionZ + centerZ) * 2.0);
+        glVertex3d((-dimensionX + centerX) * 2.0, (-dimensionY + centerY) * 2.0, (-dimensionZ + centerZ) * 2.0);
+        glVertex3d((dimensionX + centerX) * 2.0, (-dimensionY + centerY) * 2.0, (-dimensionZ + centerZ) * 2.0);
+        glVertex3d((dimensionX + centerX) * 2.0, (-dimensionY + centerY) * 2.0, (dimensionZ + centerZ) * 2.0);
+
+        glVertex3d((-dimensionX + centerX) * 2.0, (dimensionY + centerY) * 2.0, (dimensionZ + centerZ) * 2.0);
+        glVertex3d((-dimensionX + centerX) * 2.0, (dimensionY + centerY) * 2.0, (-dimensionZ + centerZ) * 2.0);
+        glVertex3d((dimensionX + centerX) * 2.0, (dimensionY + centerY) * 2.0, (-dimensionZ + centerZ) * 2.0);
+        glVertex3d((dimensionX + centerX) * 2.0, (dimensionY + centerY) * 2.0, (dimensionZ + centerZ) * 2.0);
+        glColor4f(0.7, 0.2, 0.3, 1.0);
+        glVertex3d((-dimensionX + centerX) * 2.0, (dimensionY + centerY) * 2.0, (-dimensionZ + centerZ) * 2.0);
+        glVertex3d((-dimensionX + centerX) * 2.0, (-dimensionY + centerY) * 2.0, (-dimensionZ + centerZ) * 2.0);
+        glVertex3d((dimensionX + centerX) * 2.0, (-dimensionY + centerY) * 2.0, (-dimensionZ + centerZ) * 2.0);
+        glVertex3d((dimensionX + centerX) * 2.0, (dimensionY + centerY) * 2.0, (-dimensionZ + centerZ) * 2.0);
+
+        glVertex3d((-dimensionX + centerX) * 2.0, (dimensionY + centerY) * 2.0, (dimensionZ + centerZ) * 2.0);
+        glVertex3d((-dimensionX + centerX) * 2.0, (-dimensionY + centerY) * 2.0, (dimensionZ + centerZ) * 2.0);
+        glVertex3d((dimensionX + centerX) * 2.0, (-dimensionY + centerY) * 2.0, (dimensionZ + centerZ) * 2.0);
+        glVertex3d((dimensionX + centerX) * 2.0, (dimensionY + centerY) * 2.0, (dimensionZ + centerZ) * 2.0);
+        glEnd();
+
+        glBegin(GL_LINES);
+        glColor4f(0.2, 0.2, 0.2, 0.7);
+        glVertex3d((-dimensionX + centerX) * 2.0, (-dimensionY + centerY) * 2.0, (dimensionZ + centerZ) * 2.0);
+        glVertex3d((-dimensionX + centerX) * 2.0, (-dimensionY + centerY) * 2.0, (-dimensionZ + centerZ) * 2.0);
+
+        glVertex3d((-dimensionX + centerX) * 2.0, (dimensionY + centerY) * 2.0, (-dimensionZ + centerZ) * 2.0);
+        glVertex3d((-dimensionX + centerX) * 2.0, (dimensionY + centerY) * 2.0, (dimensionZ + centerZ) * 2.0);
+
+        glVertex3d((dimensionX + centerX) * 2.0, (-dimensionY + centerY) * 2.0, (dimensionZ + centerZ) * 2.0);
+        glVertex3d((dimensionX + centerX) * 2.0, (-dimensionY + centerY) * 2.0, (-dimensionZ + centerZ) * 2.0);
+
+        glVertex3d((dimensionX + centerX) * 2.0, (dimensionY + centerY) * 2.0, (-dimensionZ + centerZ) * 2.0);
+        glVertex3d((dimensionX + centerX) * 2.0, (dimensionY + centerY) * 2.0, (dimensionZ + centerZ) * 2.0);
+
+        glVertex3d((dimensionX + centerX) * 2.0, (-dimensionY + centerY) * 2.0, (-dimensionZ + centerZ) * 2.0);
+        glVertex3d((dimensionX + centerX) * 2.0, (-dimensionY + centerY) * 2.0, (dimensionZ + centerZ) * 2.0);
+
+        glVertex3d((-dimensionX + centerX) * 2.0, (dimensionY + centerY) * 2.0, (dimensionZ + centerZ) * 2.0);
+        glVertex3d((-dimensionX + centerX) * 2.0, (dimensionY + centerY) * 2.0, (-dimensionZ + centerZ) * 2.0);
+
+        glVertex3d((-dimensionX + centerX) * 2.0, (dimensionY + centerY) * 2.0, (-dimensionZ + centerZ) * 2.0);
+        glVertex3d((-dimensionX + centerX) * 2.0, (-dimensionY + centerY) * 2.0, (-dimensionZ + centerZ) * 2.0);
+
+        glVertex3d((dimensionX + centerX) * 2.0, (-dimensionY + centerY) * 2.0, (-dimensionZ + centerZ) * 2.0);
+        glVertex3d((dimensionX + centerX) * 2.0, (dimensionY + centerY) * 2.0, (-dimensionZ + centerZ) * 2.0);
+
+        glVertex3d((-dimensionX + centerX) * 2.0, (dimensionY + centerY) * 2.0, (dimensionZ + centerZ) * 2.0);
+        glVertex3d((-dimensionX + centerX) * 2.0, (-dimensionY + centerY) * 2.0, (dimensionZ + centerZ) * 2.0);
+
+        glVertex3d((dimensionX + centerX) * 2.0, (-dimensionY + centerY) * 2.0, (dimensionZ + centerZ) * 2.0);
+        glVertex3d((dimensionX + centerX) * 2.0, (dimensionY + centerY) * 2.0, (dimensionZ + centerZ) * 2.0);
+
+        glVertex3d((-dimensionX + centerX) * 2.0, (-dimensionY + centerY) * 2.0, (dimensionZ + centerZ) * 2.0);
+        glVertex3d((dimensionX + centerX) * 2.0, (-dimensionY + centerY) * 2.0, (dimensionZ + centerZ) * 2.0);
+
+        glVertex3d((-dimensionX + centerX) * 2.0, (-dimensionY + centerY) * 2.0, (-dimensionZ + centerZ) * 2.0);
+        glVertex3d((dimensionX + centerX) * 2.0, (-dimensionY + centerY) * 2.0, (-dimensionZ + centerZ) * 2.0);
+
+        glVertex3d((-dimensionX + centerX) * 2.0, (dimensionY + centerY) * 2.0, (-dimensionZ + centerZ) * 2.0);
+        glVertex3d((dimensionX + centerX) * 2.0, (dimensionY + centerY) * 2.0, (-dimensionZ + centerZ) * 2.0);
+
+        glVertex3d((-dimensionX + centerX) * 2.0, (dimensionY + centerY) * 2.0, (dimensionZ + centerZ) * 2.0);
+        glVertex3d((dimensionX + centerX) * 2.0, (dimensionY + centerY) * 2.0, (dimensionZ + centerZ) * 2.0);
+        glEnd();
+
+    }
+
+    // draw particles:
     for (int i = 0; i < grid.cellCount; i++) {
 
         vector<Particle>& particleVector = grid.particlesInGrid[i];
@@ -285,6 +463,7 @@ void OceanSailing::drawScene() {
             particleVector[j].draw();
         }
     }
+    //printf("%.4f, %.4f, %.4f\n", myShipBlock.centerPosition.X(), myShipBlock.centerPosition.Y(), myShipBlock.centerPosition.Z());
 
 }
 

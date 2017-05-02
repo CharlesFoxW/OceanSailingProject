@@ -17,9 +17,9 @@
 #define BOUNDARY_STIFFNESS  10000.0
 #define DAMPING_COEFF   -10.0
 
-#define MAX_NUM_PARTICLES   5000
-
 extern int ParticleCount;
+extern bool isReady;
+extern int waveClock;
 
 class OceanSailing {
 public:
@@ -48,7 +48,11 @@ public:
 
     Vector entranceVelocity;
     Vector gravity;
-    Vector externalForce;
+    bool hasShipBlock;
+    int numOfTopParticles;
+    double currentWaterLevel;
+    ShipBlock myShipBlock;
+    bool hasWave;
 };
 
 

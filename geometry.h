@@ -8,7 +8,7 @@
 using namespace std;
 
 #define PI 3.141592653589793238462643383279
-
+#define MAX_NUM_PARTICLES   3500
 
 class Vector {
 public:
@@ -28,11 +28,11 @@ public:
     Vector operator/(const double b) const { return Vector(x / b,y / b,z / b); }
     Vector operator*(const Vector& v) const { return Vector(x * v.x, y * v.y, z * v.z); }
     Vector& operator*=(const Vector& v)     { x *= v.x; y *= v.y; z *= v.z; return *this; }
+    bool operator==(const Vector &b) const { return x == b.x && y == b.y && z == b.z;}
 
     double X() {return x;}
     double Y() {return y;}
     double Z() {return z;}
-    double maxValue() {return x > y && x > z ? x : y > z ? y : z;}
     double dotProduct(Vector vec) {return x * vec.x + y * vec.y + z * vec.z;}
     Vector crossProduct(Vector vec) {return Vector(y * vec.z - vec.y * z, -x * vec.z + vec.x * z, x * vec.y - vec.x * y);}
     double magnitude() {return sqrt(x * x + y * y + z * z);}
@@ -44,13 +44,7 @@ public:
         }
         return *this;
     }
-    Vector getNormal() {
-        Vector vec = *this;
-        vec.normalize();
-        return vec;
-    }
 
-private:
     double x;
     double y;
     double z;
@@ -77,15 +71,14 @@ public:
     Particle(Vector p, Vector v);
 
     void draw();
-    void clear();
 
     Vector position;
     Vector velocity;
-    Vector force;
     Vector acceleration;
     double density;
     double pressure;
     bool isOnSurface;
+    bool isOnTopSurface;
     int index;
 
 };
@@ -105,6 +98,19 @@ public:
     int dimensionZ;
     int cellCount;
     vector<Particle> * particlesInGrid;
+};
+
+class ShipBlock {
+public:
+    ShipBlock();
+
+    Vector centerPosition;
+    Vector acceleration;
+    Vector velocity;
+    double length;
+    double width;
+    double height;
+    vector<Plane> faces;
 };
 
 

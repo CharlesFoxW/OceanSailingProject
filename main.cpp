@@ -1,4 +1,5 @@
 #include <iostream>
+#include "pic.h"
 #include "oceanSailing.h"
 
 // camera parameters
@@ -13,6 +14,9 @@ int g_iLeftMouseButton,g_iRightMouseButton;
 int windowWidth, windowHeight;
 
 OceanSailing myOceanSailing;
+int waveClock = 0;
+bool saveScreenToFile;
+int sprite;
 
 void showBoundingBox();
 
@@ -33,6 +37,7 @@ void myinit()
     glEnable(GL_LINE_SMOOTH);
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    glDisable(GL_CULL_FACE);
 
     myOceanSailing = OceanSailing();
 
@@ -65,6 +70,32 @@ void reshape(int w, int h)
     glutPostRedisplay();
 }
 
+/* Write a screenshot, in the PPM format, to the specified filename, in PPM format */
+void saveScreenshot(int windowWidth, int windowHeight, char *filename)
+{
+    if (filename == NULL)
+        return;
+
+    // Allocate a picture buffer
+    Pic * in = pic_alloc(windowWidth, windowHeight, 3, NULL);
+
+    printf("File to save to: %s\n", filename);
+
+    for (int i=windowHeight-1; i>=0; i--)
+    {
+        glReadPixels(0, windowHeight-i-1, windowWidth, 1, GL_RGB, GL_UNSIGNED_BYTE,
+                     &in->pix[i*in->nx*in->bpp]);
+    }
+
+    if (ppm_write(filename, in))
+        printf("File saved Successfully\n");
+    else
+        printf("Error in Saving\n");
+
+    pic_free(in);
+}
+
+
 void display() {
 
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
@@ -81,6 +112,24 @@ void display() {
 
     // draw particles:
     myOceanSailing.drawScene();
+
+    // save screen to file
+    char s[20]="picxxxx.ppm";
+    s[3] = 48 + (sprite / 1000);
+    s[4] = 48 + (sprite % 1000) / 100;
+    s[5] = 48 + (sprite % 100 ) / 10;
+    s[6] = 48 + sprite % 10;
+    if (saveScreenToFile)
+    {
+        saveScreenshot(windowWidth, windowHeight, s);
+        //saveScreenToFile=0; // save only once, change this if you want continuos image generation (i.e. animation)
+        sprite++;
+    }
+
+    if (sprite >= 500) // allow only 500 snapshots
+    {
+        exit(0);
+    }
 
     glutSwapBuffers();
 }
@@ -149,8 +198,45 @@ void keyboardFunc (unsigned char key, int x, int y) {
         case 27:    //ESC key
             exit(0);
             break;
-
+        case 'w':
+            waveClock = 0;
+            myOceanSailing.hasWave = !(myOceanSailing.hasWave);
+            break;
+        case 's':
+            saveScreenToFile = true;
+            break;
         default: break;
+    }
+}
+
+void specialInput(int key, int x, int y) {
+    switch (key) {
+        case GLUT_KEY_UP:
+            // add acceleration to +y direction
+            if (myOceanSailing.hasShipBlock && isReady) {
+                myOceanSailing.myShipBlock.velocity.x += 2.0;
+            }
+            break;
+        case GLUT_KEY_DOWN:
+            // add acceleration to +y direction
+            if (myOceanSailing.hasShipBlock && isReady) {
+                myOceanSailing.myShipBlock.velocity.x -= 2.0;
+            }
+            break;
+        case GLUT_KEY_LEFT:
+            // add acceleration to +y direction
+            if (myOceanSailing.hasShipBlock && isReady) {
+                myOceanSailing.myShipBlock.velocity.y += 2.0;
+            }
+            break;
+        case GLUT_KEY_RIGHT:
+            // add acceleration to +y direction
+            if (myOceanSailing.hasShipBlock && isReady) {
+                myOceanSailing.myShipBlock.velocity.y -= 2.0;
+            }
+            break;
+        default:
+            break;
     }
 }
 
@@ -188,6 +274,7 @@ int main(int argc, char** argv) {
 
     /* register for keyboard events */
     glutKeyboardFunc(keyboardFunc);
+    glutSpecialFunc(specialInput);
 
     /* do initialization */
     myinit();
